@@ -3,12 +3,14 @@
 'use client';
 
 import { Moon, Sun } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 
 export function ThemeToggle() {
   const [mounted, setMounted] = useState(false);
   const { setTheme, resolvedTheme } = useTheme();
+  const pathname = usePathname();
 
   const setThemeColor = (theme?: string) => {
     const meta = document.querySelector('meta[name="theme-color"]');
@@ -24,12 +26,18 @@ export function ThemeToggle() {
 
   useEffect(() => {
     setMounted(true);
-    setThemeColor(resolvedTheme);
   }, []);
+
+  // 监听主题变化和路由变化，确保主题色始终同步
+  useEffect(() => {
+    if (mounted) {
+      setThemeColor(resolvedTheme);
+    }
+  }, [mounted, resolvedTheme, pathname]);
 
   if (!mounted) {
     // 渲染一个占位符以避免布局偏移
-    return <div className='w-10 h-10' />;
+    return <div className='w-8 h-8' />;
   }
 
   const toggleTheme = () => {
@@ -49,7 +57,7 @@ export function ThemeToggle() {
   return (
     <button
       onClick={toggleTheme}
-      className='w-10 h-10 p-2 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
+      className='w-8 h-8 p-1.5 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
       aria-label='Toggle theme'
     >
       {resolvedTheme === 'dark' ? (

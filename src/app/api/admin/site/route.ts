@@ -33,17 +33,33 @@ export async function POST(request: NextRequest) {
       Announcement,
       SearchDownstreamMaxPage,
       SiteInterfaceCacheTime,
-      ImageProxy,
+      DoubanProxyType,
       DoubanProxy,
+      DoubanImageProxyType,
+      DoubanImageProxy,
+      BangumiProxy,
+      BangumiImageProxy,
       DisableYellowFilter,
+      DanmakuApiBaseUrl,
+      TVBoxEnabled,
+      TVBoxPassword,
+      PlaybackSaveInterval,
     } = body as {
       SiteName: string;
       Announcement: string;
       SearchDownstreamMaxPage: number;
       SiteInterfaceCacheTime: number;
-      ImageProxy: string;
+      DoubanProxyType: string;
       DoubanProxy: string;
+      DoubanImageProxyType: string;
+      DoubanImageProxy: string;
+      BangumiProxy?: string;
+      BangumiImageProxy?: string;
       DisableYellowFilter: boolean;
+      DanmakuApiBaseUrl?: string;
+      TVBoxEnabled?: boolean;
+      TVBoxPassword?: string;
+      PlaybackSaveInterval?: number;
     };
 
     // 参数校验
@@ -52,9 +68,23 @@ export async function POST(request: NextRequest) {
       typeof Announcement !== 'string' ||
       typeof SearchDownstreamMaxPage !== 'number' ||
       typeof SiteInterfaceCacheTime !== 'number' ||
-      typeof ImageProxy !== 'string' ||
+      typeof DoubanProxyType !== 'string' ||
       typeof DoubanProxy !== 'string' ||
-      typeof DisableYellowFilter !== 'boolean'
+      typeof DoubanImageProxyType !== 'string' ||
+      typeof DoubanImageProxy !== 'string' ||
+      (BangumiProxy !== undefined && typeof BangumiProxy !== 'string') ||
+      (BangumiImageProxy !== undefined &&
+        typeof BangumiImageProxy !== 'string') ||
+      typeof DisableYellowFilter !== 'boolean' ||
+      (DanmakuApiBaseUrl !== undefined &&
+        typeof DanmakuApiBaseUrl !== 'string') ||
+      (TVBoxEnabled !== undefined && typeof TVBoxEnabled !== 'boolean') ||
+      (TVBoxPassword !== undefined && typeof TVBoxPassword !== 'string') ||
+      (PlaybackSaveInterval !== undefined &&
+        (typeof PlaybackSaveInterval !== 'number' ||
+          !Number.isFinite(PlaybackSaveInterval) ||
+          PlaybackSaveInterval < 1 ||
+          PlaybackSaveInterval > 3600))
     ) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -68,7 +98,7 @@ export async function POST(request: NextRequest) {
       const user = adminConfig.UserConfig.Users.find(
         (u) => u.username === username
       );
-      if (!user || user.role !== 'admin') {
+      if (!user || user.role !== 'admin' || user.banned) {
         return NextResponse.json({ error: '权限不足' }, { status: 401 });
       }
     }
@@ -79,10 +109,27 @@ export async function POST(request: NextRequest) {
       Announcement,
       SearchDownstreamMaxPage,
       SiteInterfaceCacheTime,
-      ImageProxy,
+      DoubanProxyType,
       DoubanProxy,
+      DoubanImageProxyType,
+      DoubanImageProxy,
+      BangumiProxy: BangumiProxy || '',
+      BangumiImageProxy: BangumiImageProxy || '',
       DisableYellowFilter,
+      DanmakuApiBaseUrl,
+      TVBoxEnabled,
+      TVBoxPassword,
+      PlaybackSaveInterval,
     };
+
+    // 同步更新 ConfigFile 中的 cache_time
+    try {
+      const configFileData = JSON.parse(adminConfig.ConfigFile);
+      configFileData.cache_time = SiteInterfaceCacheTime;
+      adminConfig.ConfigFile = JSON.stringify(configFileData);
+    } catch (e) {
+      console.error('更新 ConfigFile 中的 cache_time 失败:', e);
+    }
 
     // 写入数据库
     if (storage && typeof (storage as any).setAdminConfig === 'function') {

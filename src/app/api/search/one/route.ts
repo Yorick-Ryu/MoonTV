@@ -1,16 +1,34 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-import { getCacheTime, getConfig } from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
+import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
+import { searchFromApiStream } from '@/lib/downstream';
+import { matchesFullSearchTitle } from '@/lib/search-title';
+import { SearchResult } from '@/lib/types';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'edge';
 
-// OrionTV 兼容接口
-export async function GET(request: Request) {
+// OrionTV 兼容接口（JSON 非流式）
+export async function GET(request: NextRequest) {
+
+  // 检查是否为本地存储模式
+  const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
+  const isLocalStorage = storageType === 'localstorage';
+
+  let authInfo = null;
+  if (!isLocalStorage) {
+    authInfo = getAuthInfoFromCookie(request);
+    if (!authInfo || !authInfo.username) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  }
+
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
   const resourceId = searchParams.get('resourceId');
+  const timeoutParam = searchParams.get('timeout');
+  const timeout = timeoutParam ? parseInt(timeoutParam, 10) * 1000 : undefined; // 毫秒
 
   if (!query || !resourceId) {
     const cacheTime = await getCacheTime();
@@ -21,16 +39,16 @@ export async function GET(request: Request) {
           'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
           'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
           'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+          'Netlify-Vary': 'query',
         },
       }
     );
   }
 
   const config = await getConfig();
-  const apiSites = config.SourceConfig.filter((site) => !site.disabled);
+  const apiSites = await getAvailableApiSites(authInfo?.username);
 
   try {
-    // 根据 resourceId 查找对应的 API 站点
     const targetSite = apiSites.find((site) => site.key === resourceId);
     if (!targetSite) {
       return NextResponse.json(
@@ -42,14 +60,28 @@ export async function GET(request: Request) {
       );
     }
 
-    const results = await searchFromApi(targetSite, query);
-    let result = results.filter((r) => r.title === query);
+    // 聚合搜索（使用流式实现做非流式聚合）
+    const allResults: SearchResult[] = [];
+    for await (const batch of searchFromApiStream(
+      targetSite,
+      query,
+      true,
+      timeout
+    )) {
+      allResults.push(...batch);
+    }
+
+    // Playback-source selection requires the complete title, not just its prefix.
+    let result = allResults.filter((r) =>
+      matchesFullSearchTitle(r.title, query)
+    );
     if (!config.SiteConfig.DisableYellowFilter) {
-      result = result.filter((result) => {
-        const typeName = result.type_name || '';
+      result = result.filter((item) => {
+        const typeName = item.type_name || '';
         return !yellowWords.some((word: string) => typeName.includes(word));
       });
     }
+
     const cacheTime = await getCacheTime();
 
     if (result.length === 0) {
@@ -60,18 +92,19 @@ export async function GET(request: Request) {
         },
         { status: 404 }
       );
-    } else {
-      return NextResponse.json(
-        { results: result },
-        {
-          headers: {
-            'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
-            'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-            'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
-          },
-        }
-      );
     }
+
+    return NextResponse.json(
+      { results: result },
+      {
+        headers: {
+          'Cache-Control': `public, max-age=${cacheTime}, s-maxage=${cacheTime}`,
+          'CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+          'Vercel-CDN-Cache-Control': `public, s-maxage=${cacheTime}`,
+          'Netlify-Vary': 'query',
+        },
+      }
+    );
   } catch (error) {
     return NextResponse.json(
       {

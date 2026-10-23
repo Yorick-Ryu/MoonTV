@@ -26,14 +26,6 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (storageType === 'd1' || storageType === 'upstash') {
-    return NextResponse.json(
-      {
-        error: 'D1 和 Upstash 实例请通过配置文件调整',
-      },
-      { status: 400 }
-    );
-  }
 
   try {
     const body = (await request.json()) as BaseBody & Record<string, any>;
@@ -60,7 +52,7 @@ export async function POST(request: NextRequest) {
       const userEntry = adminConfig.UserConfig.Users.find(
         (u) => u.username === username
       );
-      if (!userEntry || userEntry.role !== 'admin') {
+      if (!userEntry || userEntry.role !== 'admin' || userEntry.banned) {
         return NextResponse.json({ error: '权限不足' }, { status: 401 });
       }
     }

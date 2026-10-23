@@ -1,14 +1,28 @@
-/* eslint-disable no-console,@typescript-eslint/no-explicit-any */
+/* eslint-disable no-console,@typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 'use client';
 
-import { KeyRound, LogOut, Settings, Shield, User, X } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import {
+  Check,
+  ChevronDown,
+  ExternalLink,
+  KeyRound,
+  LogOut,
+  Settings,
+  Shield,
+  User,
+  X,
+} from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { saveNavSettings } from '@/lib/nav-settings';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
+
+import { useNavigationLoading } from './NavigationLoadingProvider';
+import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
   username?: string;
@@ -17,20 +31,86 @@ interface AuthInfo {
 
 export const UserMenu: React.FC = () => {
   const router = useRouter();
+  const pathname = usePathname();
+  const { startLoading } = useNavigationLoading();
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [mounted, setMounted] = useState(false);
 
   // 设置相关状态
   const [defaultAggregateSearch, setDefaultAggregateSearch] = useState(true);
+  const [defaultStreamSearch, setDefaultStreamSearch] = useState(true);
+  const [simpleMode, setSimpleMode] = useState(false);
+  // 自动隐藏导航栏（类任务栏效果）
+  const [autoHideNav, setAutoHideNav] = useState(false);
   const [doubanProxyUrl, setDoubanProxyUrl] = useState('');
-  const [imageProxyUrl, setImageProxyUrl] = useState('');
-  const [enableOptimization, setEnableOptimization] = useState(true);
-  const [enableImageProxy, setEnableImageProxy] = useState(false);
-  const [enableDoubanProxy, setEnableDoubanProxy] = useState(false);
+
+  const [doubanDataSource, setDoubanDataSource] = useState('direct');
+  const [doubanImageProxyType, setDoubanImageProxyType] = useState('direct');
+  const [doubanImageProxyUrl, setDoubanImageProxyUrl] = useState('');
+  const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
+  const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
+    useState(false);
+
+  const [autoDanmakuEnabled, setAutoDanmakuEnabled] = useState(false);
+  // 自动弹幕尝试次数设置，-1为无限尝试
+  const [danmakuRetryCount, setDanmakuRetryCount] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('danmakuRetryCount');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+    return 3; // 默认重试3次
+  });
+  const [enablePreferBestSource, setEnablePreferBestSource] = useState(false);
+  const [preferredDanmakuPlatform, setPreferredDanmakuPlatform] =
+    useState('bilibili1');
+  const [isDanmakuPlatformDropdownOpen, setIsDanmakuPlatformDropdownOpen] =
+    useState(false);
+
+  // 优选弹幕平台
+  const danmakuPlatformOptions = [
+    { value: 'qiyi', label: 'qiyi（爱奇艺）' },
+    { value: 'bilibili1', label: 'bilibili1（哔哩哔哩）' },
+    { value: 'imgo', label: 'imgo（芒果）' },
+    { value: 'youku', label: 'youku（优酷）' },
+    { value: 'qq', label: 'qq（腾讯）' },
+    { value: 'renren', label: 'renren（人人）' },
+    { value: 'hanjutv', label: 'hanjutv（韩剧TV）' },
+    { value: 'bahamut', label: 'bahamut（巴哈姆特）' },
+    { value: 'dandan', label: 'dandan（弹弹）' },
+  ];
+
+  // 豆瓣数据源选项
+  const doubanDataSourceOptions = [
+    { value: 'direct', label: '直连（服务器直接请求豆瓣）' },
+    { value: 'cors-proxy-zwei', label: 'Cors Proxy By Zwei' },
+    {
+      value: 'cmliussss-cdn-tencent',
+      label: '豆瓣 CDN By CMLiussss（腾讯云）',
+    },
+    { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
+    { value: 'custom', label: '自定义代理' },
+  ];
+
+  // 豆瓣图片代理选项
+  const doubanImageProxyTypeOptions = [
+    { value: 'direct', label: '直连（浏览器直接请求豆瓣）' },
+    { value: 'server', label: '服务器代理（由服务器代理请求豆瓣）' },
+    { value: 'img3', label: '豆瓣精品 CDN（阿里云）' },
+    {
+      value: 'cmliussss-cdn-tencent',
+      label: '豆瓣 CDN By CMLiussss（腾讯云）',
+    },
+    { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
+    { value: 'custom', label: '自定义代理' },
+  ];
 
   // 修改密码相关状态
   const [newPassword, setNewPassword] = useState('');
@@ -41,6 +121,31 @@ export const UserMenu: React.FC = () => {
   // 版本检查相关状态
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [isChecking, setIsChecking] = useState(true);
+
+  // TVBox 设置
+  const [tvboxEnabled, setTvboxEnabled] = useState(false);
+  const [tvboxPassword, setTvboxPassword] = useState('');
+  const [tvboxUrl, setTvboxUrl] = useState('');
+  const isPrivileged = authInfo?.role === 'owner' || authInfo?.role === 'admin';
+
+  const fetchTvboxConfig = async () => {
+    try {
+      const res = await fetch('/api/admin/tvbox', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setTvboxEnabled(!!data.enabled);
+      setTvboxPassword(data.password || '');
+      setTvboxUrl(data.url || '');
+    } catch (err) {
+      console.warn('Failed to load TVBox admin config:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      fetchTvboxConfig();
+    }
+  }, [isSettingsOpen]);
 
   // 确保组件已挂载
   useEffect(() => {
@@ -69,42 +174,87 @@ export const UserMenu: React.FC = () => {
         setDefaultAggregateSearch(JSON.parse(savedAggregateSearch));
       }
 
-      const savedEnableDoubanProxy = localStorage.getItem('enableDoubanProxy');
-      const defaultDoubanProxy =
-        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY || '';
-      if (savedEnableDoubanProxy !== null) {
-        setEnableDoubanProxy(JSON.parse(savedEnableDoubanProxy));
-      } else if (defaultDoubanProxy) {
-        setEnableDoubanProxy(true);
+      const savedDefaultStreamSearch = localStorage.getItem(
+        'defaultStreamSearch'
+      );
+      if (savedDefaultStreamSearch !== null) {
+        setDefaultStreamSearch(JSON.parse(savedDefaultStreamSearch));
+      }
+
+      const savedSimpleMode = localStorage.getItem('simpleMode');
+      if (savedSimpleMode !== null) {
+        setSimpleMode(JSON.parse(savedSimpleMode));
+      }
+
+      const savedAutoHideNav = localStorage.getItem('autoHideNav');
+      if (savedAutoHideNav !== null) {
+        setAutoHideNav(savedAutoHideNav === 'true');
+      }
+
+      const savedDoubanDataSource = localStorage.getItem('doubanDataSource');
+      const defaultDoubanProxyType =
+        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE || 'direct';
+      if (savedDoubanDataSource !== null) {
+        setDoubanDataSource(savedDoubanDataSource);
+      } else if (defaultDoubanProxyType) {
+        setDoubanDataSource(defaultDoubanProxyType);
       }
 
       const savedDoubanProxyUrl = localStorage.getItem('doubanProxyUrl');
+      const defaultDoubanProxy =
+        (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY || '';
       if (savedDoubanProxyUrl !== null) {
         setDoubanProxyUrl(savedDoubanProxyUrl);
       } else if (defaultDoubanProxy) {
         setDoubanProxyUrl(defaultDoubanProxy);
       }
 
-      const savedEnableImageProxy = localStorage.getItem('enableImageProxy');
-      const defaultImageProxy =
-        (window as any).RUNTIME_CONFIG?.IMAGE_PROXY || '';
-      if (savedEnableImageProxy !== null) {
-        setEnableImageProxy(JSON.parse(savedEnableImageProxy));
-      } else if (defaultImageProxy) {
-        setEnableImageProxy(true);
+      const savedDoubanImageProxyType = localStorage.getItem(
+        'doubanImageProxyType'
+      );
+      const defaultDoubanImageProxyType =
+        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE || 'direct';
+      if (savedDoubanImageProxyType !== null) {
+        setDoubanImageProxyType(savedDoubanImageProxyType);
+      } else if (defaultDoubanImageProxyType) {
+        setDoubanImageProxyType(defaultDoubanImageProxyType);
       }
 
-      const savedImageProxyUrl = localStorage.getItem('imageProxyUrl');
-      if (savedImageProxyUrl !== null) {
-        setImageProxyUrl(savedImageProxyUrl);
-      } else if (defaultImageProxy) {
-        setImageProxyUrl(defaultImageProxy);
+      const savedDoubanImageProxyUrl = localStorage.getItem(
+        'doubanImageProxyUrl'
+      );
+      const defaultDoubanImageProxyUrl =
+        (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
+      if (savedDoubanImageProxyUrl !== null) {
+        setDoubanImageProxyUrl(savedDoubanImageProxyUrl);
+      } else if (defaultDoubanImageProxyUrl) {
+        setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
       }
 
-      const savedEnableOptimization =
-        localStorage.getItem('enableOptimization');
-      if (savedEnableOptimization !== null) {
-        setEnableOptimization(JSON.parse(savedEnableOptimization));
+      const savedAutoDanmakuEnabled =
+        localStorage.getItem('autoDanmakuEnabled');
+      if (savedAutoDanmakuEnabled !== null) {
+        setAutoDanmakuEnabled(JSON.parse(savedAutoDanmakuEnabled));
+      }
+
+      const savedDanmakuRetryCount = localStorage.getItem('danmakuRetryCount');
+      if (savedDanmakuRetryCount !== null) {
+        const parsed = parseInt(savedDanmakuRetryCount, 10);
+        if (!isNaN(parsed)) setDanmakuRetryCount(parsed);
+      }
+
+      const savedEnablePreferBestSource = localStorage.getItem(
+        'enablePreferBestSource'
+      );
+      if (savedEnablePreferBestSource !== null) {
+        setEnablePreferBestSource(JSON.parse(savedEnablePreferBestSource));
+      }
+
+      const savedPreferredPlatform = localStorage.getItem(
+        'preferredDanmakuPlatform'
+      );
+      if (savedPreferredPlatform) {
+        setPreferredDanmakuPlatform(savedPreferredPlatform);
       }
     }
   }, []);
@@ -124,6 +274,41 @@ export const UserMenu: React.FC = () => {
 
     checkUpdate();
   }, []);
+
+  // 点击外部区域关闭下拉框
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isDoubanDropdownOpen) {
+        const target = event.target as Element;
+        if (!target.closest('[data-dropdown="douban-datasource"]')) {
+          setIsDoubanDropdownOpen(false);
+        }
+      }
+    };
+
+    if (isDoubanDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () =>
+        document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isDoubanDropdownOpen]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isDoubanImageProxyDropdownOpen) {
+        const target = event.target as Element;
+        if (!target.closest('[data-dropdown="douban-image-proxy"]')) {
+          setIsDoubanImageProxyDropdownOpen(false);
+        }
+      }
+    };
+
+    if (isDoubanImageProxyDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () =>
+        document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isDoubanImageProxyDropdownOpen]);
 
   const handleMenuClick = () => {
     setIsOpen(!isOpen);
@@ -146,6 +331,12 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleAdminPanel = () => {
+    // 如果已经在管理页面，直接关闭菜单，不触发加载动画
+    if (pathname === '/admin') {
+      setIsOpen(false);
+      return;
+    }
+    startLoading();
     router.push('/admin');
   };
 
@@ -218,11 +409,63 @@ export const UserMenu: React.FC = () => {
   };
 
   // 设置相关的处理函数
+
+  const handleAutoDanmakuToggle = (value: boolean) => {
+    setAutoDanmakuEnabled(value);
+    localStorage.setItem('autoDanmakuEnabled', JSON.stringify(value));
+  };
+
+  const handleDanmakuRetryCountChange = (value: number) => {
+    // 只允许-1或非负整数
+    if (value < -1) return;
+    setDanmakuRetryCount(value);
+    localStorage.setItem('danmakuRetryCount', value.toString());
+  };
+
+  const handlePreferBestSourceToggle = (value: boolean) => {
+    setEnablePreferBestSource(value);
+    localStorage.setItem('enablePreferBestSource', JSON.stringify(value));
+  };
+
+  const handlePreferredPlatformChange = (value: string) => {
+    setPreferredDanmakuPlatform(value);
+    localStorage.setItem('preferredDanmakuPlatform', value);
+  };
+
   const handleAggregateToggle = (value: boolean) => {
     setDefaultAggregateSearch(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(value));
     }
+  };
+
+  const handleDefaultStreamToggle = (value: boolean) => {
+    setDefaultStreamSearch(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('defaultStreamSearch', JSON.stringify(value));
+    }
+  };
+
+  const handleAutoHideNavToggle = (value: boolean) => {
+    setAutoHideNav(value);
+    saveNavSettings({ autoHideNav: value });
+  };
+
+  const handleSimpleModeToggle = (value: boolean) => {
+    setSimpleMode(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('simpleMode', JSON.stringify(value));
+    }
+    // 简洁模式变化时关闭设置并刷新页面
+    setIsSettingsOpen(false);
+    setTimeout(() => {
+      // 开启简洁模式时回到首页，避免停留在当前子页面
+      if (value && pathname !== '/') {
+        window.location.href = '/';
+      } else {
+        window.location.reload();
+      }
+    }, 100);
   };
 
   const handleDoubanProxyUrlChange = (value: string) => {
@@ -232,59 +475,86 @@ export const UserMenu: React.FC = () => {
     }
   };
 
-  const handleImageProxyUrlChange = (value: string) => {
-    setImageProxyUrl(value);
+  const handleDoubanDataSourceChange = (value: string) => {
+    setDoubanDataSource(value);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('imageProxyUrl', value);
+      localStorage.setItem('doubanDataSource', value);
     }
   };
 
-  const handleOptimizationToggle = (value: boolean) => {
-    setEnableOptimization(value);
+  const handleDoubanImageProxyTypeChange = (value: string) => {
+    setDoubanImageProxyType(value);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('enableOptimization', JSON.stringify(value));
+      localStorage.setItem('doubanImageProxyType', value);
     }
   };
 
-  const handleImageProxyToggle = (value: boolean) => {
-    setEnableImageProxy(value);
+  const handleDoubanImageProxyUrlChange = (value: string) => {
+    setDoubanImageProxyUrl(value);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('enableImageProxy', JSON.stringify(value));
+      localStorage.setItem('doubanImageProxyUrl', value);
     }
   };
 
-  const handleDoubanProxyToggle = (value: boolean) => {
-    setEnableDoubanProxy(value);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('enableDoubanProxy', JSON.stringify(value));
+  // 获取感谢信息
+  const getThanksInfo = (dataSource: string) => {
+    switch (dataSource) {
+      case 'cors-proxy-zwei':
+        return {
+          text: 'Thanks to @Zwei',
+          url: 'https://github.com/bestzwei',
+        };
+      case 'cmliussss-cdn-tencent':
+      case 'cmliussss-cdn-ali':
+        return {
+          text: 'Thanks to @CMLiussss',
+          url: 'https://github.com/cmliu',
+        };
+      default:
+        return null;
     }
   };
 
   const handleResetSettings = () => {
-    const defaultImageProxy = (window as any).RUNTIME_CONFIG?.IMAGE_PROXY || '';
+    const defaultDoubanProxyType =
+      (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY_TYPE || 'direct';
     const defaultDoubanProxy =
       (window as any).RUNTIME_CONFIG?.DOUBAN_PROXY || '';
+    const defaultDoubanImageProxyType =
+      (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE || 'direct';
+    const defaultDoubanImageProxyUrl =
+      (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
 
     setDefaultAggregateSearch(true);
-    setEnableOptimization(true);
+    setDefaultStreamSearch(true);
+    setSimpleMode(false);
+    setAutoHideNav(false);
+    saveNavSettings({ autoHideNav: false });
+
     setDoubanProxyUrl(defaultDoubanProxy);
-    setEnableDoubanProxy(!!defaultDoubanProxy);
-    setEnableImageProxy(!!defaultImageProxy);
-    setImageProxyUrl(defaultImageProxy);
+    setDoubanDataSource(defaultDoubanProxyType);
+    setDoubanImageProxyType(defaultDoubanImageProxyType);
+    setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
+
+    setEnablePreferBestSource(false);
+    setAutoDanmakuEnabled(false);
+    setPreferredDanmakuPlatform('bilibili1');
+    setDanmakuRetryCount(3); // 新增：重置弹幕自动尝试次数为3
 
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
-      localStorage.setItem('enableOptimization', JSON.stringify(true));
+      localStorage.setItem('defaultStreamSearch', JSON.stringify(true));
+      localStorage.setItem('simpleMode', JSON.stringify(false));
+
       localStorage.setItem('doubanProxyUrl', defaultDoubanProxy);
-      localStorage.setItem(
-        'enableDoubanProxy',
-        JSON.stringify(!!defaultDoubanProxy)
-      );
-      localStorage.setItem(
-        'enableImageProxy',
-        JSON.stringify(!!defaultImageProxy)
-      );
-      localStorage.setItem('imageProxyUrl', defaultImageProxy);
+      localStorage.setItem('doubanDataSource', defaultDoubanProxyType);
+      localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
+      localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
+
+      localStorage.setItem('enablePreferBestSource', JSON.stringify(false));
+      localStorage.setItem('autoDanmakuEnabled', JSON.stringify(false));
+      localStorage.setItem('preferredDanmakuPlatform', 'bilibili1');
+      localStorage.setItem('danmakuRetryCount', '3'); // 新增：重置本地弹幕自动尝试次数为3
     }
   };
 
@@ -402,9 +672,10 @@ export const UserMenu: React.FC = () => {
 
           {/* 版本信息 */}
           <button
-            onClick={() =>
-              window.open('https://github.com/senshinya/MoonTV', '_blank')
-            }
+            onClick={() => {
+              setIsVersionPanelOpen(true);
+              handleCloseMenu();
+            }}
             className='w-full px-3 py-2 text-center flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors text-xs'
           >
             <div className='flex items-center gap-1'>
@@ -439,7 +710,7 @@ export const UserMenu: React.FC = () => {
       />
 
       {/* 设置面板 */}
-      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6'>
+      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6 overflow-y-auto'>
         {/* 标题栏 */}
         <div className='flex items-center justify-between mb-6'>
           <div className='flex items-center gap-3'>
@@ -465,6 +736,231 @@ export const UserMenu: React.FC = () => {
 
         {/* 设置项 */}
         <div className='space-y-6'>
+          {/* 简洁模式下隐藏所有代理相关设置 */}
+          {!simpleMode && (
+            <>
+              {/* 豆瓣数据源选择 */}
+              <div className='space-y-3'>
+                <div>
+                  <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                    豆瓣数据代理
+                  </h4>
+                  <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                    选择获取豆瓣数据的方式
+                  </p>
+                </div>
+                <div className='relative' data-dropdown='douban-datasource'>
+                  {/* 自定义下拉选择框 */}
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setIsDoubanDropdownOpen(!isDoubanDropdownOpen)
+                    }
+                    className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
+                  >
+                    {
+                      doubanDataSourceOptions.find(
+                        (option) => option.value === doubanDataSource
+                      )?.label
+                    }
+                  </button>
+
+                  {/* 下拉箭头 */}
+                  <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                        isDoubanDropdownOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+
+                  {/* 下拉选项列表 */}
+                  {isDoubanDropdownOpen && (
+                    <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                      {doubanDataSourceOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type='button'
+                          onClick={() => {
+                            handleDoubanDataSourceChange(option.value);
+                            setIsDoubanDropdownOpen(false);
+                          }}
+                          className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                            doubanDataSource === option.value
+                              ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                              : 'text-gray-900 dark:text-gray-100'
+                          }`}
+                        >
+                          <span className='truncate'>{option.label}</span>
+                          {doubanDataSource === option.value && (
+                            <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 感谢信息 */}
+                {getThanksInfo(doubanDataSource) && (
+                  <div className='mt-3'>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        window.open(
+                          getThanksInfo(doubanDataSource)!.url,
+                          '_blank'
+                        )
+                      }
+                      className='flex items-center justify-center gap-1.5 w-full px-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer'
+                    >
+                      <span className='font-medium'>
+                        {getThanksInfo(doubanDataSource)!.text}
+                      </span>
+                      <ExternalLink className='w-3.5 opacity-70' />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* 豆瓣代理地址设置 - 仅在选择自定义代理时显示 */}
+              {doubanDataSource === 'custom' && (
+                <div className='space-y-3'>
+                  <div>
+                    <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                      豆瓣代理地址
+                    </h4>
+                    <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                      自定义代理服务器地址
+                    </p>
+                  </div>
+                  <input
+                    type='text'
+                    className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 shadow-sm hover:border-gray-400 dark:hover:border-gray-500'
+                    placeholder='例如: https://proxy.example.com/fetch?url='
+                    value={doubanProxyUrl}
+                    onChange={(e) => handleDoubanProxyUrlChange(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {/* 分割线 */}
+              <div className='border-t border-gray-200 dark:border-gray-700'></div>
+
+              {/* 豆瓣图片代理设置 */}
+              <div className='space-y-3'>
+                <div>
+                  <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                    豆瓣图片代理
+                  </h4>
+                  <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                    选择获取豆瓣图片的方式
+                  </p>
+                </div>
+                <div className='relative' data-dropdown='douban-image-proxy'>
+                  {/* 自定义下拉选择框 */}
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setIsDoubanImageProxyDropdownOpen(
+                        !isDoubanImageProxyDropdownOpen
+                      )
+                    }
+                    className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
+                  >
+                    {
+                      doubanImageProxyTypeOptions.find(
+                        (option) => option.value === doubanImageProxyType
+                      )?.label
+                    }
+                  </button>
+
+                  {/* 下拉箭头 */}
+                  <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                        isDoubanDropdownOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+
+                  {/* 下拉选项列表 */}
+                  {isDoubanImageProxyDropdownOpen && (
+                    <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                      {doubanImageProxyTypeOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type='button'
+                          onClick={() => {
+                            handleDoubanImageProxyTypeChange(option.value);
+                            setIsDoubanImageProxyDropdownOpen(false);
+                          }}
+                          className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                            doubanImageProxyType === option.value
+                              ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                              : 'text-gray-900 dark:text-gray-100'
+                          }`}
+                        >
+                          <span className='truncate'>{option.label}</span>
+                          {doubanImageProxyType === option.value && (
+                            <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 感谢信息 */}
+                {getThanksInfo(doubanImageProxyType) && (
+                  <div className='mt-3'>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        window.open(
+                          getThanksInfo(doubanImageProxyType)!.url,
+                          '_blank'
+                        )
+                      }
+                      className='flex items-center justify-center gap-1.5 w-full px-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer'
+                    >
+                      <span className='font-medium'>
+                        {getThanksInfo(doubanImageProxyType)!.text}
+                      </span>
+                      <ExternalLink className='w-3.5 opacity-70' />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* 豆瓣图片代理地址设置 - 仅在选择自定义代理时显示 */}
+              {doubanImageProxyType === 'custom' && (
+                <div className='space-y-3'>
+                  <div>
+                    <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                      豆瓣图片代理地址
+                    </h4>
+                    <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                      自定义图片代理服务器地址
+                    </p>
+                  </div>
+                  <input
+                    type='text'
+                    className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 shadow-sm hover:border-gray-400 dark:hover:border-gray-500'
+                    placeholder='例如: https://proxy.example.com/fetch?url='
+                    value={doubanImageProxyUrl}
+                    onChange={(e) =>
+                      handleDoubanImageProxyUrlChange(e.target.value)
+                    }
+                  />
+                </div>
+              )}
+
+              {/* 分割线 */}
+              <div className='border-t border-gray-200 dark:border-gray-700'></div>
+            </>
+          )}
+
           {/* 默认聚合搜索结果 */}
           <div className='flex items-center justify-between'>
             <div>
@@ -489,14 +985,14 @@ export const UserMenu: React.FC = () => {
             </label>
           </div>
 
-          {/* 优选和测速 */}
+          {/* 默认流式搜索模式 */}
           <div className='flex items-center justify-between'>
             <div>
               <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                启用优选和测速
+                默认流式搜索模式
               </h4>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                如出现播放器劫持问题可关闭
+                关闭后默认使用一次性返回，空结果将不缓存
               </p>
             </div>
             <label className='flex items-center cursor-pointer'>
@@ -504,77 +1000,248 @@ export const UserMenu: React.FC = () => {
                 <input
                   type='checkbox'
                   className='sr-only peer'
-                  checked={enableOptimization}
-                  onChange={(e) => handleOptimizationToggle(e.target.checked)}
+                  checked={defaultStreamSearch}
+                  onChange={(e) => handleDefaultStreamToggle(e.target.checked)}
                 />
                 <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
                 <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
               </div>
             </label>
+          </div>
+
+          {/* 优选播放源 */}
+          <div className='flex items-center justify-between'>
+            <div>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                优选播放源
+              </h4>
+              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                开启后，加载视频时执行优选，关闭则跳过
+              </p>
+            </div>
+            <label className='flex items-center cursor-pointer'>
+              <div className='relative'>
+                <input
+                  type='checkbox'
+                  className='sr-only peer'
+                  checked={enablePreferBestSource}
+                  onChange={(e) =>
+                    handlePreferBestSourceToggle(e.target.checked)
+                  }
+                />
+                <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+              </div>
+            </label>
+          </div>
+
+          {/* 自动匹配弹幕 */}
+          <div className='flex items-center justify-between'>
+            <div>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                自动匹配弹幕
+              </h4>
+              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                在进入播放页面时自动匹配并加载弹幕（推荐）
+              </p>
+            </div>
+            <label className='flex items-center cursor-pointer'>
+              <div className='relative'>
+                <input
+                  type='checkbox'
+                  className='sr-only peer'
+                  checked={autoDanmakuEnabled}
+                  onChange={(e) => handleAutoDanmakuToggle(e.target.checked)}
+                />
+                <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+              </div>
+            </label>
+          </div>
+          {/* 弹幕自动尝试次数设置 */}
+          <div className='flex items-center justify-between mt-2'>
+            <div>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                弹幕自动尝试次数
+              </h4>
+              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                自动弹幕获取的尝试次数，-1为一直获取直到成功
+              </p>
+            </div>
+            <input
+              type='number'
+              min='-1'
+              className='w-11 px-2 py-1 rounded text-sm bg-[#f5f5f5] dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none border-none focus:outline-none focus:border-none focus:ring-0'
+              value={danmakuRetryCount}
+              onChange={(e) =>
+                handleDanmakuRetryCountChange(Number(e.target.value))
+              }
+            />
+          </div>
+
+          {/* 优选弹幕平台 */}
+          <div className='mt-3 relative'>
+            <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+              优先弹幕平台
+            </h4>
+
+            {/* 自定义下拉选择框 */}
+            <button
+              type='button'
+              onClick={() =>
+                setIsDanmakuPlatformDropdownOpen(!isDanmakuPlatformDropdownOpen)
+              }
+              className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left mt-2'
+            >
+              {
+                danmakuPlatformOptions.find(
+                  (option) => option.value === preferredDanmakuPlatform
+                )?.label
+              }
+            </button>
+
+            {/* 下拉箭头 */}
+            <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none mt-2'>
+              <ChevronDown
+                className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                  isDanmakuPlatformDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </div>
+
+            {/* 下拉选项列表 */}
+            {isDanmakuPlatformDropdownOpen && (
+              <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                {danmakuPlatformOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type='button'
+                    onClick={() => {
+                      handlePreferredPlatformChange(option.value);
+                      setIsDanmakuPlatformDropdownOpen(false);
+                    }}
+                    className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                      preferredDanmakuPlatform === option.value
+                        ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                        : 'text-gray-900 dark:text-gray-100'
+                    }`}
+                  >
+                    <span className='truncate'>{option.label}</span>
+                    {preferredDanmakuPlatform === option.value && (
+                      <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+              自动匹配弹幕时优先使用此平台
+            </p>
           </div>
 
           {/* 分割线 */}
           <div className='border-t border-gray-200 dark:border-gray-700'></div>
 
-          {/* 豆瓣代理开关 */}
-          <div className='flex items-center justify-between'>
-            <div>
-              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                启用豆瓣代理
-              </h4>
-              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                启用后，豆瓣数据将通过代理服务器获取
-              </p>
-            </div>
-            <label className='flex items-center cursor-pointer'>
-              <div className='relative'>
-                <input
-                  type='checkbox'
-                  className='sr-only peer'
-                  checked={enableDoubanProxy}
-                  onChange={(e) => handleDoubanProxyToggle(e.target.checked)}
-                />
-                <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
-                <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
-              </div>
-            </label>
-          </div>
-
-          {/* 豆瓣代理地址设置 */}
+          {/* TVBox 接口状态 */}
           <div className='space-y-3'>
-            <div>
-              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                豆瓣代理地址
-              </h4>
-              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                仅在启用豆瓣代理时生效，留空则使用服务器 API
-              </p>
+            <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+              TVBox 接口
+            </h4>
+
+            {/* 状态和接口地址同行 */}
+            <div className='flex items-center gap-3'>
+              {/* 状态徽章 */}
+              <div
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium shrink-0 ${
+                  tvboxEnabled
+                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                }`}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    tvboxEnabled ? 'bg-green-500 animate-pulse' : 'bg-gray-400'
+                  }`}
+                />
+                <span>{tvboxEnabled ? '已开启' : '未开启'}</span>
+              </div>
+
+              {/* 接口地址 */}
+              {tvboxEnabled && tvboxUrl ? (
+                <>
+                  <input
+                    ref={(input) => {
+                      if (input) {
+                        const url = new URL(tvboxUrl);
+                        url.searchParams.set('pwd', tvboxPassword || '');
+                        input.value = url.toString();
+                      }
+                    }}
+                    type='text'
+                    className='flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+                    readOnly
+                  />
+                  <button
+                    type='button'
+                    className='shrink-0 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors'
+                    onClick={(e) => {
+                      const input = e.currentTarget
+                        .previousElementSibling as HTMLInputElement;
+                      navigator.clipboard.writeText(input.value);
+                    }}
+                  >
+                    复制
+                  </button>
+                </>
+              ) : (
+                !tvboxEnabled && (
+                  <span className='text-xs text-gray-500 dark:text-gray-400'>
+                    {storageType === 'localstorage'
+                      ? '请修改环境变量 TVBOX_ENABLED 以开启'
+                      : isPrivileged
+                      ? '请前往管理面板的站点配置中开启'
+                      : '请联系管理员开启'}
+                  </span>
+                )
+              )}
             </div>
-            <input
-              type='text'
-              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
-                enableDoubanProxy
-                  ? 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400'
-                  : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 placeholder-gray-400 dark:placeholder-gray-600 cursor-not-allowed'
-              }`}
-              placeholder='例如: https://proxy.example.com/fetch?url='
-              value={doubanProxyUrl}
-              onChange={(e) => handleDoubanProxyUrlChange(e.target.value)}
-              disabled={!enableDoubanProxy}
-            />
+
+            {/* 说明文字和提示 */}
+            {tvboxEnabled && tvboxUrl && (
+              <div className='space-y-2'>
+                <p className='text-xs text-gray-500 dark:text-gray-400'>
+                  将该地址填入 TVBox 的订阅/配置接口即可使用。
+                </p>
+
+                {storageType === 'localstorage' && (
+                  <p className='text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-3 py-2 rounded-lg'>
+                    💡 本地模式，开关由环境变量 TVBOX_ENABLED 控制，口令为
+                    PASSWORD
+                  </p>
+                )}
+
+                {isPrivileged && storageType !== 'localstorage' && (
+                  <p className='text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-3 py-2 rounded-lg'>
+                    💡 如需修改 TVBox
+                    配置（开关/密码），请前往管理面板的站点配置
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 分割线 */}
           <div className='border-t border-gray-200 dark:border-gray-700'></div>
 
-          {/* 图片代理开关 */}
+          {/* 简洁模式设置 */}
           <div className='flex items-center justify-between'>
             <div>
               <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                启用图片代理
+                简洁模式
               </h4>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                启用后，所有图片加载将通过代理服务器
+                开启后导航栏只保留首页和搜索，首页只保留继续观看和收藏夹
               </p>
             </div>
             <label className='flex items-center cursor-pointer'>
@@ -582,8 +1249,8 @@ export const UserMenu: React.FC = () => {
                 <input
                   type='checkbox'
                   className='sr-only peer'
-                  checked={enableImageProxy}
-                  onChange={(e) => handleImageProxyToggle(e.target.checked)}
+                  checked={simpleMode}
+                  onChange={(e) => handleSimpleModeToggle(e.target.checked)}
                 />
                 <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
                 <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
@@ -591,28 +1258,28 @@ export const UserMenu: React.FC = () => {
             </label>
           </div>
 
-          {/* 图片代理地址设置 */}
-          <div className='space-y-3'>
+          {/* 自动隐藏导航栏设置（仅桌面端生效，移动端导航栏始终显示） */}
+          <div className='hidden md:flex items-center justify-between'>
             <div>
               <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                图片代理地址
+                自动隐藏导航栏
               </h4>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                仅在启用图片代理时生效
+                开启后桌面端导航栏默认收起，鼠标移到屏幕顶部边缘时自动弹出，页面内容随之上移
               </p>
             </div>
-            <input
-              type='text'
-              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
-                enableImageProxy
-                  ? 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400'
-                  : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 placeholder-gray-400 dark:placeholder-gray-600 cursor-not-allowed'
-              }`}
-              placeholder='例如: https://imageproxy.example.com/?url='
-              value={imageProxyUrl}
-              onChange={(e) => handleImageProxyUrlChange(e.target.value)}
-              disabled={!enableImageProxy}
-            />
+            <label className='flex items-center cursor-pointer'>
+              <div className='relative'>
+                <input
+                  type='checkbox'
+                  className='sr-only peer'
+                  checked={autoHideNav}
+                  onChange={(e) => handleAutoHideNavToggle(e.target.checked)}
+                />
+                <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+              </div>
+            </label>
           </div>
         </div>
 
@@ -724,7 +1391,7 @@ export const UserMenu: React.FC = () => {
       <div className='relative'>
         <button
           onClick={handleMenuClick}
-          className='w-10 h-10 p-2 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
+          className='w-8 h-8 p-1.5 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
           aria-label='User Menu'
         >
           <User className='w-full h-full' />
@@ -744,6 +1411,12 @@ export const UserMenu: React.FC = () => {
       {isChangePasswordOpen &&
         mounted &&
         createPortal(changePasswordPanel, document.body)}
+
+      {/* 版本面板 */}
+      <VersionPanel
+        isOpen={isVersionPanelOpen}
+        onClose={() => setIsVersionPanelOpen(false)}
+      />
     </>
   );
 };

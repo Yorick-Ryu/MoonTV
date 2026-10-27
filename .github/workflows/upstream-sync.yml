@@ -26,5 +26,28 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git remote add stardm https://github.com/Stardm0/MoonTV.git
           git fetch stardm main
-          git merge --no-edit stardm/main
+          set -euo pipefail
+
+          # Keep the two release workflows intentionally removed by this Pages fork.
+          # Only resolve modify/delete conflicts where our side still deletes the file.
+          if ! git merge --no-commit --no-ff stardm/main; then
+            if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+              echo 'Upstream merge failed before a merge could be started.' >&2
+              exit 1
+            fi
+            for path in .github/workflows/release.yml .github/workflows/version-manager.yml; do
+              if [[ "$(git status --porcelain -- "$path")" == "DU $path" ]]; then
+                git rm -- "$path"
+              fi
+            done
+            if [[ -n "$(git diff --name-only --diff-filter=U)" ]]; then
+              echo 'Upstream has conflicts requiring manual review:' >&2
+              git diff --name-only --diff-filter=U >&2
+              exit 1
+            fi
+          fi
+
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit --no-edit
+          fi
           git push origin HEAD:main

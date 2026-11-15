@@ -358,7 +358,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }`;
 
   return (
-    <div className='flex h-full flex-col overflow-hidden bg-black/[0.03] px-3 py-3 dark:bg-white/[0.04]'>
+    <div className='flex h-full min-w-0 flex-col overflow-hidden bg-black/[0.03] px-3 py-3 dark:bg-white/[0.04]'>
       {/* 主要的 Tab 切换 - 分段控件 */}
       <div className='mb-3 flex flex-shrink-0 gap-1 rounded-xl bg-black/5 p-1 dark:bg-white/10'>
         {totalEpisodes > 1 && (
@@ -512,9 +512,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             </button>
           </div>
 
-          {/* 集数网格 */}
-          <div className='scrollbar-hide flex-1 overflow-y-auto pb-1'>
-            <div className='grid grid-cols-3 gap-2 sm:grid-cols-4'>
+          {/* 按标题宽度自动换行，长标题不挤占相邻条目 */}
+          <div className='scrollbar-hide min-h-0 min-w-0 flex-1 overflow-y-auto pb-1'>
+            <div className='flex flex-wrap items-start gap-2'>
               {(() => {
                 const len = currentEnd - currentStart + 1;
                 const episodes = Array.from({ length: len }, (_, i) =>
@@ -523,29 +523,39 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                 return episodes;
               })().map((episodeNumber) => {
                 const isActive = episodeNumber === value;
+                const title = episodes_titles?.[episodeNumber - 1]?.trim();
+                // 仅简化纯集数标题，保留“第12集 上篇”等标题里的有效信息。
+                const match = title?.match(/^第\s*(\d+)\s*集$/);
+                const label = match?.[1] || title || String(episodeNumber);
+                const isCompact = /^\d+$/.test(label);
                 return (
                   <button
                     key={episodeNumber}
+                    type='button'
+                    title={title || `第${episodeNumber}集`}
+                    aria-pressed={isActive}
                     onClick={() => handleEpisodeClick(episodeNumber - 1)}
-                    className={`flex h-9 items-center justify-center whitespace-nowrap rounded-lg px-1 py-1 font-mono text-xs font-medium transition-all duration-200
+                    className={`flex min-h-9 min-w-0 max-w-full items-center rounded-lg px-3 py-2 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2
+                      ${
+                        isCompact
+                          ? 'min-w-[3rem] justify-center font-mono'
+                          : 'justify-start text-left'
+                      }
                       ${
                         isActive
                           ? 'bg-green-500 text-white shadow-sm shadow-green-500/25 dark:bg-green-600'
                           : 'bg-black/5 text-gray-700 hover:bg-black/10 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
                       }`.trim()}
                   >
-                    {(() => {
-                      const title = episodes_titles?.[episodeNumber - 1];
-                      if (!title) {
-                        return episodeNumber;
+                    <span
+                      className={
+                        isActive
+                          ? 'min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]'
+                          : 'min-w-0 truncate'
                       }
-                      // 如果匹配"第X集"格式，提取中间的数字
-                      const match = title.match(/第(\d+)集/);
-                      if (match) {
-                        return match[1];
-                      }
-                      return title;
-                    })()}
+                    >
+                      {label}
+                    </span>
                   </button>
                 );
               })}
